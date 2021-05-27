@@ -65,4 +65,8 @@ The core dump likely must be manually extracted at this point by finding its
 location in the filesystem (depends on which process crashed) and using the
 `gomote` command to copy it back.
 
-TODO: Add a flag to clean up all instances of a certain type.
+To clean up instances you created of a particular type, use the `-clean` flag.
+
+```
+goswarm -clean freebsd-amd64-12_2
+```

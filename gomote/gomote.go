@@ -29,6 +29,42 @@ func Push(ctx context.Context, inst string) error {
 	return nil
 }
 
+type Instance struct {
+	Name, Type string
+}
+
+func List(ctx context.Context) ([]Instance, error) {
+	result, err := exec.CommandContext(ctx, "gomote", "list").CombinedOutput()
+	if err != nil {
+		return nil, err
+	}
+	rd := bytes.NewReader(result)
+	sc := bufio.NewScanner(rd)
+	var insts []Instance
+	for sc.Scan() {
+		line := sc.Text()
+		details := strings.Split(line, "\t")
+		if len(details) < 2 {
+			return nil, fmt.Errorf("unexpected `gomote list` format: %q", line)
+		}
+		name := strings.TrimSpace(details[0])
+		typ := strings.TrimSpace(details[1])
+		insts = append(insts, Instance{name, typ})
+	}
+	if sc.Err() != nil {
+		return nil, err
+	}
+	return insts, nil
+}
+
+func Destroy(ctx context.Context, inst string) error {
+	err := exec.CommandContext(ctx, "gomote", "destroy", inst).Run()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func Run(ctx context.Context, inst string, env []string, cmd ...string) ([]byte, error) {
 	args := []string{"run"}
 	for _, v := range env {

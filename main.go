@@ -19,12 +19,14 @@ import (
 
 var (
 	instances uint
+	clean     bool
 	env       stringSetVar
 )
 
 func init() {
 	flag.UintVar(&instances, "i", 10, "number of instances to run in parallel")
 	flag.Var(&env, "e", "an environment variable to use on the gomote of the form VAR=value, may be specified multiple times")
+	flag.BoolVar(&clean, "clean", false, "clean up existing gomotes of the provided instance type")
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "goswarm creates a pool of gomotes and executes a command on them until one of them fails.\n\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "Note that goswarm does not tear down gomotes.\n\n")
@@ -65,21 +67,53 @@ func validateInstanceType(ctx context.Context, typ string) error {
 	return fmt.Errorf("invalid instance type: %s", typ)
 }
 
+func cleanUpInstances(ctx context.Context, typ string) error {
+	insts, err := gomote.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, inst := range insts {
+		if inst.Type != typ {
+			continue
+		}
+		log.Printf("Destroying %s.", inst.Name)
+		if err := gomote.Destroy(ctx, inst.Name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func run() error {
-	if flag.NArg() < 2 {
+	// No arguments is always wrong.
+	if flag.NArg() == 0 {
 		return fmt.Errorf("expected an instance type, followed by a command")
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
+	// We have at least an instance type, so validate that
+	// and clean up instances if asked.
 	typ := flag.Arg(0)
 	if err := validateInstanceType(ctx, typ); err != nil {
 		return err
 	}
+	if clean {
+		if err := cleanUpInstances(ctx, typ); err != nil {
+			return fmt.Errorf("cleaning up instances: %v", err)
+		}
+	}
+	if flag.NArg() == 1 {
+		// No command, so nothing more to do.
+		// Surface an error if -clean was not passed.
+		if !clean {
+			return fmt.Errorf("expected a command")
+		}
+		return nil
+	}
 
 	cmd := flag.Args()[1:]
-
 	eg, ctx := errgroup.WithContext(ctx)
 	for i := 0; i < int(instances); i++ {
 		eg.Go(func() error {
