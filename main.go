@@ -1,3 +1,7 @@
+// Copyright 2021 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package main
 
 import (
@@ -92,7 +96,7 @@ func run() error {
 				log.Printf("Running command on %s.", inst)
 				results, err := gomote.Run(ctx, inst, env, cmd...)
 				if err != nil {
-					if werr := os.WriteFile(inst + ".out", results, 0o644); werr != nil {
+					if werr := os.WriteFile(inst+".out", results, 0o644); werr != nil {
 						fmt.Fprintf(os.Stderr, "failed to write output: %v\n", werr)
 						fmt.Fprintln(os.Stderr, "##### GOMOTE OUTPUT #####")
 						fmt.Fprintln(os.Stderr, string(results))
@@ -108,4 +112,3 @@ func run() error {
 	}
 	return nil
 }
-
