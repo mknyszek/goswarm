@@ -49,15 +49,19 @@ need to be in git) as `debug.bash` (with the appropriate file permissions).
 #!/usr/bin/env bash
 
 ulimit -c unlimited
-
+echo "/tmp/core.%e.%p" | sudo tee /proc/sys/kernel/core_pattern
+export GOTRACEBACK=crash
 $(dirname $0)/all.bash
 ```
 
 and invoke `goswarm` like so:
 
 ```
-GOROOT=path/to/go/repo goswarm -e GOTRACEBACK=crash freebsd-amd64-12_2 go/src/debug.bash
+GOROOT=path/to/go/repo goswarm freebsd-amd64-12_2 go/src/debug.bash
 ```
+
+`goswarm` will automatically copy down the full working directory on the gomote
+back as a gzipped tar (as per `gomote gettar`).
 
 `goswarm` purposefully *does not* clean up instances, so that the failing
 instance may be examined in more detail.
@@ -70,3 +74,9 @@ To clean up instances you created of a particular type, use the `-clean` flag.
 ```
 goswarm -clean freebsd-amd64-12_2
 ```
+
+Finally, it's often useful when reproducing an issue to ignore flakes, if you're
+to tackle some specific issue.
+For this, `goswarm` provides the `-match` flag that takes a regular expression.
+Only if the output of `gomote run` matches that expression will it be considered
+a failure.
