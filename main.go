@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
+	"regexp"
 	"strings"
 
 	"github.com/mknyszek/goswarm/gomote"
@@ -21,11 +23,13 @@ var (
 	instances uint
 	clean     bool
 	env       stringSetVar
+	errMatch  string
 )
 
 func init() {
 	flag.UintVar(&instances, "i", 10, "number of instances to run in parallel")
 	flag.Var(&env, "e", "an environment variable to use on the gomote of the form VAR=value, may be specified multiple times")
+	flag.StringVar(&errMatch, "match", "", "stop only if a failure's output matches this regexp")
 	flag.BoolVar(&clean, "clean", false, "clean up existing gomotes of the provided instance type")
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "goswarm creates a pool of gomotes and executes a command on them until one of them fails.\n\n")
@@ -113,6 +117,15 @@ func run() error {
 		return nil
 	}
 
+	var errRegexp *regexp.Regexp
+	if errMatch != "" {
+		r, err := regexp.Compile(errMatch)
+		if err != nil {
+			return fmt.Errorf("compiling regexp: %v", err)
+		}
+		errRegexp = r
+	}
+
 	cmd := flag.Args()[1:]
 	eg, ctx := errgroup.WithContext(ctx)
 	for i := 0; i < int(instances); i++ {
@@ -129,7 +142,23 @@ func run() error {
 			for {
 				log.Printf("Running command on %s.", inst)
 				results, err := gomote.Run(ctx, inst, env, cmd...)
+				select {
+				case <-ctx.Done():
+					// Context canceled. Return nil.
+					return nil
+				default:
+				}
 				if err != nil {
+					_, ok := err.(*exec.ExitError)
+					if !ok {
+						// Failed in some other way.
+						return err
+					}
+					if errRegexp != nil && !errRegexp.Match(results) {
+						// Only consider failures that match the regexp
+						// "real" failures.
+						continue
+					}
 					if werr := os.WriteFile(inst+".out", results, 0o644); werr != nil {
 						fmt.Fprintf(os.Stderr, "failed to write output: %v\n", werr)
 						fmt.Fprintln(os.Stderr, "##### GOMOTE OUTPUT #####")
