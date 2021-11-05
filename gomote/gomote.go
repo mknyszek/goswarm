@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 )
@@ -73,6 +74,14 @@ func Run(ctx context.Context, inst string, env []string, cmd ...string) ([]byte,
 	args = append(args, inst)
 	args = append(args, cmd...)
 	return exec.CommandContext(ctx, "gomote", args...).CombinedOutput()
+}
+
+func Get(ctx context.Context, inst string, out io.Writer) error {
+	args := []string{"gettar"}
+	args = append(args, inst)
+	cmd := exec.CommandContext(ctx, "gomote", args...)
+	cmd.Stdout = out
+	return cmd.Run()
 }
 
 func InstanceTypes(ctx context.Context) ([]string, error) {

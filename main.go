@@ -5,6 +5,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"flag"
 	"fmt"
@@ -154,6 +155,9 @@ func run() error {
 						// Failed in some other way.
 						return err
 					}
+					if bytes.Contains(results, []byte(inst)) {
+						return fmt.Errorf("lost builder %q", inst)
+					}
 					if errRegexp != nil && !errRegexp.Match(results) {
 						// Only consider failures that match the regexp
 						// "real" failures.
@@ -164,6 +168,14 @@ func run() error {
 						fmt.Fprintln(os.Stderr, "##### GOMOTE OUTPUT #####")
 						fmt.Fprintln(os.Stderr, string(results))
 						fmt.Fprintln(os.Stderr, "#########################")
+					}
+					f, cerr := os.Create(inst + ".tar.gz")
+					if cerr != nil {
+						fmt.Fprintf(os.Stderr, "failed to create file for tar: %v\n", cerr)
+					}
+					defer f.Close()
+					if cerr := gomote.Get(ctx, inst, f); cerr != nil {
+						fmt.Fprintf(os.Stderr, "failed to get tar: %v\n", cerr)
 					}
 					return err
 				}
