@@ -163,13 +163,18 @@ func run() error {
 						// "real" failures.
 						continue
 					}
-					if werr := os.WriteFile(inst+".out", results, 0o644); werr != nil {
+
+					logname := inst + ".out"
+					if werr := os.WriteFile(logname, results, 0o644); werr != nil {
 						fmt.Fprintf(os.Stderr, "failed to write output: %v\n", werr)
 						fmt.Fprintln(os.Stderr, "##### GOMOTE OUTPUT #####")
 						fmt.Fprintln(os.Stderr, string(results))
 						fmt.Fprintln(os.Stderr, "#########################")
 					}
-					f, cerr := os.Create(inst + ".tar.gz")
+					log.Printf("Failure log in %s", logname)
+
+					tarname := inst + ".tar.gz"
+					f, cerr := os.Create(tarname)
 					if cerr != nil {
 						fmt.Fprintf(os.Stderr, "failed to create file for tar: %v\n", cerr)
 					}
@@ -177,6 +182,8 @@ func run() error {
 					if cerr := gomote.Get(ctx, inst, f); cerr != nil {
 						fmt.Fprintf(os.Stderr, "failed to get tar: %v\n", cerr)
 					}
+					log.Printf("Files in %s", tarname)
+
 					return err
 				}
 			}
