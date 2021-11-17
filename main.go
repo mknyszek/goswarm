@@ -7,8 +7,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -23,6 +25,7 @@ import (
 var (
 	instances uint
 	clean     bool
+	verbosity uint
 	env       stringSetVar
 	errMatch  string
 )
@@ -32,6 +35,7 @@ func init() {
 	flag.Var(&env, "e", "an environment variable to use on the gomote of the form VAR=value, may be specified multiple times")
 	flag.StringVar(&errMatch, "match", "", "stop only if a failure's output matches this regexp")
 	flag.BoolVar(&clean, "clean", false, "clean up existing gomotes of the provided instance type")
+	flag.UintVar(&verbosity, "v", 2, "verbosity level: 0 is quiet, 2 is the maximum")
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "goswarm creates a pool of gomotes and executes a command on them until one of them fails.\n\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "Note that goswarm does not tear down gomotes.\n\n")
@@ -53,7 +57,7 @@ func (s *stringSetVar) Set(c string) error {
 
 func main() {
 	flag.Parse()
-	if err := run(); err != nil {
+	if err := run(); err != nil && err != errFound {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
@@ -89,10 +93,16 @@ func cleanUpInstances(ctx context.Context, typ string) error {
 	return nil
 }
 
+var errFound = errors.New("found failure")
+
 func run() error {
 	// No arguments is always wrong.
 	if flag.NArg() == 0 {
 		return fmt.Errorf("expected an instance type, followed by a command")
+	}
+	if verbosity == 0 {
+		// Quiet mode.
+		log.SetOutput(io.Discard)
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -160,30 +170,46 @@ func run() error {
 					}
 					if errRegexp != nil && !errRegexp.Match(results) {
 						// Only consider failures that match the regexp
-						// "real" failures.
+						// "real" failures. But if our verbosity level
+						// is high enough, dump the failure anyway.
+						f, err := os.CreateTemp("", inst)
+						if err != nil {
+							log.Printf("Failed to write output from %s to temp file: %v", inst, err)
+						}
+						if _, err := f.Write(results); err != nil {
+							log.Printf("Failed to write output from %s to %s: %v", inst, f.Name(), err)
+							f.Close()
+						}
+						f.Close()
+						if verbosity < 2 {
+							log.Printf("Unmatched failure on %s.", inst)
+						} else {
+							log.Printf("Unmatched failure on %s:\n%s", inst, string(results))
+						}
+						log.Printf("Wrote output of %s to %s.", inst, f.Name())
 						continue
 					}
-					if werr := os.WriteFile(inst+".out", results, 0o644); werr != nil {
-						fmt.Fprintf(os.Stderr, "failed to write output: %v\n", werr)
-						fmt.Fprintln(os.Stderr, "##### GOMOTE OUTPUT #####")
-						fmt.Fprintln(os.Stderr, string(results))
-						fmt.Fprintln(os.Stderr, "#########################")
+					log.Printf("Discovered failure on %s.", inst)
+					outName := inst + ".out"
+					if err := os.WriteFile(outName, results, 0o644); err != nil {
+						log.Printf("Dumping output from %s:\n%s", inst, string(results))
+						return fmt.Errorf("failed to write output: %v\n", err)
 					}
-					f, cerr := os.Create(inst + ".tar.gz")
-					if cerr != nil {
-						fmt.Fprintf(os.Stderr, "failed to create file for tar: %v\n", cerr)
+					log.Printf("Wrote output of %s to %s.", inst, outName)
+					tarName := inst + ".tar.gz"
+					f, err := os.Create(tarName)
+					if err != nil {
+						return fmt.Errorf("failed to create archive for %s: %v", inst, err)
 					}
 					defer f.Close()
-					if cerr := gomote.Get(ctx, inst, f); cerr != nil {
-						fmt.Fprintf(os.Stderr, "failed to get tar: %v\n", cerr)
+					if err := gomote.Get(ctx, inst, f); err != nil {
+						return fmt.Errorf("failed to download archive for %s: %v", inst, err)
 					}
-					return err
+					log.Printf("Downloaded archive of %s to %s.", inst, tarName)
+					return errFound
 				}
 			}
 		})
 	}
-	if err := eg.Wait(); err != nil {
-		return err
-	}
-	return nil
+	return eg.Wait()
 }

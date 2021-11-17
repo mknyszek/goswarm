@@ -41,11 +41,18 @@ To execute `all.bash` on 10 (the default) NetBSD 9.0 gomotes at once, do
 GOROOT=path/to/go/repo goswarm netbsd-386-9_0 go/src/all.bash
 ```
 
-It's highly recommended to also pass a `-match` argument to match on a specific
-failure on the builder.
+It's highly recommended to also pass a `-match` argument that executes until
+a failure whose output matches the provided regular expression is encountered.
 Even just `-match="fatal error:"` is quite effective.
 Without it, `goswarm` will stop even if `gomote` fails due to some unrelated
 error.
+
+If `-match` is specified, unmatched failures will always be written to a
+temporary file in the default temporary directory for your platform.
+By default they will also be logged, but this can be disabled by setting
+`-v` to a value less than 2.
+
+### Core dumps
 
 To capture core dump, add the following file to your Go repository (it does not
 need to be in git) as `debug.bash` (with the appropriate file permissions).
@@ -76,6 +83,8 @@ GOROOT=path/to/go/repo goswarm netbsd-386-9_0 go/src/debug.bash
 `goswarm` will automatically copy down the full working directory on the gomote
 back as a gzipped tar (as per `gomote gettar`).
 
+### Clean up
+
 `goswarm` purposefully *does not* clean up instances, so that the failing
 instance may be examined in more detail.
 The core dump likely must be manually extracted at this point by finding its
@@ -87,9 +96,3 @@ To clean up instances you created of a particular type, use the `-clean` flag.
 ```
 goswarm -clean netbsd-386-9_0
 ```
-
-Finally, it's often useful when reproducing an issue to ignore flakes, if you're
-to tackle some specific issue.
-For this, `goswarm` provides the `-match` flag that takes a regular expression.
-Only if the output of `gomote run` matches that expression will it be considered
-a failure.
