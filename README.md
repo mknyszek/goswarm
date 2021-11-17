@@ -23,11 +23,10 @@ go install github.com/mknyszek/goswarm@latest
 
 ## Usage
 
-Before continuing, please note that *with great power comes great
-responsibility*.
-This tool can spin up an arbitrary number of `gomote` instances so please
-take great care to ensure the `gomote` instance type you're spinning up
-does *not* have limited capacity, or that you're cleared to do this.
+**WARNING:** This tool can spin up an arbitrary number of `gomote`
+instances so please take great care to ensure the `gomote` instance
+type you're spinning up does *not* have limited capacity, or that
+you're cleared to do this by the Go release team.
 
 TODO: Make `goswarm` check for and reject limited-capacity instance types
 unless the user specifically acknowledges the risks.
@@ -36,11 +35,17 @@ The typical use-case is trying to reproduce a rarely-occuring bug, usually with
 the goal of capturing a core dump or attaching GDB to the process.
 This tool only focuses on the first half of the equation.
 
-To execute `all.bash` on 10 FreeBSD 12.2 gomotes at once (the default), do
+To execute `all.bash` on 10 (the default) NetBSD 9.0 gomotes at once, do
 
 ```
-GOROOT=path/to/go/repo goswarm freebsd-amd64-12_2 go/src/all.bash
+GOROOT=path/to/go/repo goswarm netbsd-386-9_0 go/src/all.bash
 ```
+
+It's highly recommended to also pass a `-match` argument to match on a specific
+failure on the builder.
+Even just `-match="fatal error:"` is quite effective.
+Without it, `goswarm` will stop even if `gomote` fails due to some unrelated
+error.
 
 To capture core dump, add the following file to your Go repository (it does not
 need to be in git) as `debug.bash` (with the appropriate file permissions).
@@ -48,8 +53,16 @@ need to be in git) as `debug.bash` (with the appropriate file permissions).
 ```bash
 #!/usr/bin/env bash
 
+set -e
+
 ulimit -c unlimited
-echo "/tmp/core.%e.%p" | sudo tee /proc/sys/kernel/core_pattern
+
+# Linux
+# echo "/workdir/go/core.%e.%p" | sudo tee /proc/sys/kernel/core_pattern
+
+# NetBSD
+sysctl -w proc.$$.corename=$(dirname $0)/%n.%p.core
+
 export GOTRACEBACK=crash
 $(dirname $0)/all.bash
 ```
@@ -57,7 +70,7 @@ $(dirname $0)/all.bash
 and invoke `goswarm` like so:
 
 ```
-GOROOT=path/to/go/repo goswarm freebsd-amd64-12_2 go/src/debug.bash
+GOROOT=path/to/go/repo goswarm netbsd-386-9_0 go/src/debug.bash
 ```
 
 `goswarm` will automatically copy down the full working directory on the gomote
@@ -72,7 +85,7 @@ location in the filesystem (depends on which process crashed) and using the
 To clean up instances you created of a particular type, use the `-clean` flag.
 
 ```
-goswarm -clean freebsd-amd64-12_2
+goswarm -clean netbsd-386-9_0
 ```
 
 Finally, it's often useful when reproducing an issue to ignore flakes, if you're
