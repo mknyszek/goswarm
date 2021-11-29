@@ -143,11 +143,11 @@ func run() error {
 		eg.Go(func() error {
 			inst, err := gomote.Create(ctx, typ)
 			if err != nil {
-				return err
+				return fmt.Errorf("creating instance: %v", unwrap(err))
 			}
 			log.Printf("Created instance %s...", inst)
 			if err := gomote.Push(ctx, inst); err != nil {
-				return err
+				return fmt.Errorf("pushing to instance %s: %v", inst, unwrap(err))
 			}
 			log.Printf("Pushed to %s.", inst)
 			for {
@@ -212,4 +212,15 @@ func run() error {
 		})
 	}
 	return eg.Wait()
+}
+
+func unwrap(err error) error {
+	r, ok := err.(*exec.ExitError)
+	if !ok {
+		return err
+	}
+	if len(r.Stderr) == 0 {
+		return fmt.Errorf("%v: <no output>", err)
+	}
+	return fmt.Errorf("%v: <stderr>: %s", err, string(r.Stderr))
 }
