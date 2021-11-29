@@ -26,6 +26,7 @@ var (
 	instances uint
 	clean     bool
 	verbosity uint
+	deflakes  uint
 	env       stringSetVar
 	errMatch  string
 )
@@ -36,6 +37,7 @@ func init() {
 	flag.StringVar(&errMatch, "match", "", "stop only if a failure's output matches this regexp")
 	flag.BoolVar(&clean, "clean", false, "clean up existing gomotes of the provided instance type")
 	flag.UintVar(&verbosity, "v", 2, "verbosity level: 0 is quiet, 2 is the maximum")
+	flag.UintVar(&deflakes, "deflake", 5, "number of times to retry basic gomote operations")
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "goswarm creates a pool of gomotes and executes a command on them until one of them fails.\n\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "Note that goswarm does not tear down gomotes.\n\n")
@@ -141,15 +143,27 @@ func run() error {
 	eg, ctx := errgroup.WithContext(ctx)
 	for i := 0; i < int(instances); i++ {
 		eg.Go(func() error {
-			inst, err := gomote.Create(ctx, typ)
+			// Create instance.
+			var inst string
+			err := retry(func() error {
+				i, err := gomote.Create(ctx, typ)
+				inst = i
+				return err
+			}, deflakes)
 			if err != nil {
 				return fmt.Errorf("creating instance: %v", unwrap(err))
 			}
 			log.Printf("Created instance %s...", inst)
-			if err := gomote.Push(ctx, inst); err != nil {
+
+			// Push GOROOT to instance.
+			// N.B. GOROOT is implicitly passed to gomote via the environment.
+			err = retry(func() error { return gomote.Push(ctx, inst) }, deflakes)
+			if err != nil {
 				return fmt.Errorf("pushing to instance %s: %v", inst, unwrap(err))
 			}
 			log.Printf("Pushed to %s.", inst)
+
+			// Run command in a loop.
 			for {
 				log.Printf("Running command on %s.", inst)
 				results, err := gomote.Run(ctx, inst, env, cmd...)
@@ -212,6 +226,20 @@ func run() error {
 		})
 	}
 	return eg.Wait()
+}
+
+func retry(f func() error, retries uint) error {
+	i := 0
+loop:
+	err := f()
+	if err == nil {
+		return nil
+	}
+	i++
+	if i < int(retries) {
+		goto loop
+	}
+	return err
 }
 
 func unwrap(err error) error {
