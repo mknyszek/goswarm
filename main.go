@@ -151,7 +151,8 @@ func run() error {
 				return err
 			}, deflakes)
 			if err != nil {
-				return fmt.Errorf("creating instance: %v", unwrap(err))
+				log.Printf("Aborting instance creation due to too many errors: %v", unwrap(err))
+				return nil
 			}
 			log.Printf("Created instance %s...", inst)
 
@@ -159,7 +160,8 @@ func run() error {
 			// N.B. GOROOT is implicitly passed to gomote via the environment.
 			err = retry(func() error { return gomote.Push(ctx, inst) }, deflakes)
 			if err != nil {
-				return fmt.Errorf("pushing to instance %s: %v", inst, unwrap(err))
+				log.Printf("Giving up on %s due to too many errors while pushing: %v", inst, unwrap(err))
+				return nil
 			}
 			log.Printf("Pushed to %s.", inst)
 
