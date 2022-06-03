@@ -90,7 +90,7 @@ func (c *cleanMode) Set(s string) error {
 
 func main() {
 	flag.Parse()
-	if err := run(); err != nil && err != errStop {
+	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
@@ -176,8 +176,21 @@ func run() error {
 			return runOneInstance(ctx, typ, errRegexp)
 		})
 	}
-	return eg.Wait()
+	err := eg.Wait()
+	if err == errStop {
+		err = nil
+	}
+	return err
 }
+
+type testStatus int
+
+const (
+	testExecutionError testStatus = iota // tests did not run due to external error
+	testPass // tests passed
+	testFailUnmatched // tests failed but did not match regexp
+	testFailMatched // test failed and match regexp
+)
 
 // Run testing in a single instance.
 //
@@ -215,69 +228,94 @@ func runOneInstance(ctx context.Context, typ string, errRegexp *regexp.Regexp) e
 	log.Printf("Pushed to %s.", inst)
 
 	// Run command in a loop.
+	cmd := flag.Args()[1:]
 	for {
-		log.Printf("Running command on %s.", inst)
-		cmd := flag.Args()[1:]
-		results, err := gomote.Run(ctx, inst, env, cmd...)
-		select {
-		case <-ctx.Done():
-			// Context canceled. Return nil.
-			return nil
-		default:
-		}
+		status, err := runOneTest(ctx, inst, cmd, errRegexp)
 		if err != nil {
-			_, ok := err.(*exec.ExitError)
-			if !ok {
-				// Failed in some other way.
-				return err
-			}
-			if bytes.Contains(results, []byte(inst)) {
-				return fmt.Errorf("lost builder %q", inst)
-			}
-			if errRegexp != nil && !errRegexp.Match(results) {
-				// Only consider failures that match the regexp
-				// "real" failures. But if our verbosity level
-				// is high enough, dump the failure anyway.
-				f, err := os.CreateTemp("", inst)
-				if err != nil {
-					log.Printf("Failed to write output from %s to temp file: %v", inst, err)
-				}
-				if _, err := f.Write(results); err != nil {
-					log.Printf("Failed to write output from %s to %s: %v", inst, f.Name(), err)
-					f.Close()
-				}
-				f.Close()
-				if verbosity < 2 {
-					log.Printf("Unmatched failure on %s.", inst)
-				} else {
-					log.Printf("Unmatched failure on %s:\n%s", inst, string(results))
-				}
-				log.Printf("Wrote output of %s to %s.", inst, f.Name())
-				continue
-			}
-			log.Printf("Discovered failure on %s.", inst)
-			outName := inst + ".out"
-			if err := os.WriteFile(outName, results, 0o644); err != nil {
-				log.Printf("Dumping output from %s:\n%s", inst, string(results))
-				return fmt.Errorf("failed to write output: %v\n", err)
-			}
-			log.Printf("Wrote output of %s to %s.", inst, outName)
-			tarName := inst + ".tar.gz"
-			f, err := os.Create(tarName)
-			if err != nil {
-				return fmt.Errorf("failed to create archive for %s: %v", inst, err)
-			}
-			defer f.Close()
-			if err := gomote.Get(ctx, inst, f); err != nil {
-				return fmt.Errorf("failed to download archive for %s: %v", inst, err)
-			}
-			log.Printf("Downloaded archive of %s to %s.", inst, tarName)
+			return err
+		}
+		switch status {
+		case testPass, testFailUnmatched:
+			continue
+		case testFailMatched:
 			if keepGoing {
+				// Stop testing on this instance, but return
+				// nil so others keep testing.
 				return nil
 			}
+			// Abort all testing and exit.
 			return errStop
+		default:
+			panic(fmt.Sprintf("unexpected status %s", status))
 		}
 	}
+}
+
+// runOneTest runs cmd on inst. It returns an error if there is a matching
+// failure (or there is an internal gomote issue).
+//
+// If the test runs, the test status and a nil error are returned. Otherwise
+// testExecutionError is returned with the error.
+func runOneTest(ctx context.Context, inst string, cmd []string, errRegexp *regexp.Regexp) (testStatus, error) {
+	log.Printf("Running command on %s.", inst)
+	results, err := gomote.Run(ctx, inst, env, cmd...)
+	select {
+	case <-ctx.Done():
+		// Context canceled. Return nil.
+		return testExecutionError, context.Canceled
+	default:
+	}
+	if err == nil {
+		return testPass, nil
+	}
+
+	_, ok := err.(*exec.ExitError)
+	if !ok {
+		// Failed in some other way.
+		return testExecutionError, err
+	}
+	if bytes.Contains(results, []byte(inst)) {
+		return testExecutionError, fmt.Errorf("lost builder %q", inst)
+	}
+	if errRegexp != nil && !errRegexp.Match(results) {
+		// Only consider failures that match the regexp
+		// "real" failures. But if our verbosity level
+		// is high enough, dump the failure anyway.
+		f, err := os.CreateTemp("", inst)
+		if err != nil {
+			return testExecutionError, fmt.Errorf("failed to write output from %s to temp file: %w", inst, err)
+		}
+		defer f.Close()
+		if _, err := f.Write(results); err != nil {
+			return testExecutionError, fmt.Errorf("Failed to write output from %s to %s: %w", inst, f.Name(), err)
+		}
+		f.Close()
+		if verbosity < 2 {
+			log.Printf("Unmatched failure on %s.", inst)
+		} else {
+			log.Printf("Unmatched failure on %s:\n%s", inst, string(results))
+		}
+		log.Printf("Wrote output of %s to %s.", inst, f.Name())
+		return testFailUnmatched, nil
+	}
+	log.Printf("Discovered failure on %s.", inst)
+	outName := inst + ".out"
+	if err := os.WriteFile(outName, results, 0o644); err != nil {
+		log.Printf("Dumping output from %s:\n%s", inst, string(results))
+		return testExecutionError, fmt.Errorf("failed to write output: %v\n", err)
+	}
+	log.Printf("Wrote output of %s to %s.", inst, outName)
+	tarName := inst + ".tar.gz"
+	f, err := os.Create(tarName)
+	if err != nil {
+		return testExecutionError, fmt.Errorf("failed to create archive for %s: %v", inst, err)
+	}
+	defer f.Close()
+	if err := gomote.Get(ctx, inst, f); err != nil {
+		return testExecutionError, fmt.Errorf("failed to download archive for %s: %v", inst, err)
+	}
+	log.Printf("Downloaded archive of %s to %s.", inst, tarName)
+	return testFailMatched, nil
 }
 
 func retry(f func() error, retries uint) error {
