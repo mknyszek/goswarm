@@ -24,7 +24,7 @@ import (
 
 var (
 	instances uint
-	clean     bool
+	clean     cleanMode = cleanOff
 	verbosity uint
 	deflakes  uint
 	env       stringSetVar
@@ -36,7 +36,7 @@ func init() {
 	flag.UintVar(&instances, "i", 10, "number of instances to run in parallel")
 	flag.Var(&env, "e", "an environment variable to use on the gomote of the form VAR=value, may be specified multiple times")
 	flag.StringVar(&errMatch, "match", "", "stop only if a failure's output matches this regexp")
-	flag.BoolVar(&clean, "clean", false, "clean up existing gomotes of the provided instance type")
+	flag.Var(&clean, "clean", "off=do not clean up instances, start=clean up existing gomotes of the provided instance type at startup, exit=clean up instances created by goswarm on exit")
 	flag.UintVar(&verbosity, "v", 2, "verbosity level: 0 is quiet, 2 is the maximum")
 	flag.UintVar(&deflakes, "deflake", 5, "number of times to retry basic gomote operations")
 	flag.BoolVar(&keepGoing, "keep-going", false, "keep testing on remaining instances after finding a matching failure")
@@ -56,6 +56,35 @@ func (s *stringSetVar) String() string {
 
 func (s *stringSetVar) Set(c string) error {
 	*s = append(*s, c)
+	return nil
+}
+
+type cleanMode string
+
+const (
+	cleanOff   cleanMode = "off" // do not clean up.
+	cleanStart cleanMode = "start" // clean up old instances before starting.
+	cleanExit  cleanMode = "exit" // clean up instances created by goswarm on exit.
+)
+
+func (c *cleanMode) String() string {
+	if c == nil {
+		return ""
+	}
+	return string(*c)
+}
+
+func (c *cleanMode) Set(s string) error {
+	switch cleanMode(s) {
+	case cleanOff:
+		*c = cleanOff
+	case cleanStart:
+		*c = cleanStart
+	case cleanExit:
+		*c = cleanExit
+	default:
+		return fmt.Errorf("unknown clean mode %q", s)
+	}
 	return nil
 }
 
@@ -89,7 +118,7 @@ func cleanUpInstances(ctx context.Context, typ string) error {
 		if inst.Type != typ {
 			continue
 		}
-		log.Printf("Destroying %s.", inst.Name)
+		log.Printf("Destroying instance %s...", inst.Name)
 		if err := gomote.Destroy(ctx, inst.Name); err != nil {
 			return err
 		}
@@ -118,7 +147,7 @@ func run() error {
 	if err := validateInstanceType(ctx, typ); err != nil {
 		return err
 	}
-	if clean {
+	if clean == cleanStart {
 		if err := cleanUpInstances(ctx, typ); err != nil {
 			return fmt.Errorf("cleaning up instances: %v", err)
 		}
@@ -126,7 +155,7 @@ func run() error {
 	if flag.NArg() == 1 {
 		// No command, so nothing more to do.
 		// Surface an error if -clean was not passed.
-		if !clean {
+		if clean != cleanStart {
 			return fmt.Errorf("expected a command")
 		}
 		return nil
@@ -157,6 +186,15 @@ func run() error {
 				return nil
 			}
 			log.Printf("Created instance %s...", inst)
+
+			if clean == cleanExit {
+				defer func() {
+					log.Printf("Destroying instance %s...", inst)
+					if err := gomote.Destroy(context.Background(), inst); err != nil {
+						log.Printf("Error destroying instance %s: %v", inst, err)
+					}
+				}()
+			}
 
 			// Push GOROOT to instance.
 			// N.B. GOROOT is implicitly passed to gomote via the environment.
