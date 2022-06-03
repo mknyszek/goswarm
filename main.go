@@ -29,6 +29,7 @@ var (
 	deflakes  uint
 	env       stringSetVar
 	errMatch  string
+	keepGoing bool
 )
 
 func init() {
@@ -38,6 +39,7 @@ func init() {
 	flag.BoolVar(&clean, "clean", false, "clean up existing gomotes of the provided instance type")
 	flag.UintVar(&verbosity, "v", 2, "verbosity level: 0 is quiet, 2 is the maximum")
 	flag.UintVar(&deflakes, "deflake", 5, "number of times to retry basic gomote operations")
+	flag.BoolVar(&keepGoing, "keep-going", false, "keep testing on remaining instances after finding a matching failure")
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "goswarm creates a pool of gomotes and executes a command on them until one of them fails.\n\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "Note that goswarm does not tear down gomotes.\n\n")
@@ -59,7 +61,7 @@ func (s *stringSetVar) Set(c string) error {
 
 func main() {
 	flag.Parse()
-	if err := run(); err != nil && err != errFound {
+	if err := run(); err != nil && err != errStop {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
@@ -95,7 +97,7 @@ func cleanUpInstances(ctx context.Context, typ string) error {
 	return nil
 }
 
-var errFound = errors.New("found failure")
+var errStop = errors.New("stop execution due to matching failure")
 
 func run() error {
 	// No arguments is always wrong.
@@ -222,7 +224,10 @@ func run() error {
 						return fmt.Errorf("failed to download archive for %s: %v", inst, err)
 					}
 					log.Printf("Downloaded archive of %s to %s.", inst, tarName)
-					return errFound
+					if keepGoing {
+						return nil
+					}
+					return errStop
 				}
 			}
 		})
