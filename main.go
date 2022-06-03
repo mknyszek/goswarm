@@ -170,107 +170,114 @@ func run() error {
 		errRegexp = r
 	}
 
-	cmd := flag.Args()[1:]
 	eg, ctx := errgroup.WithContext(ctx)
 	for i := 0; i < int(instances); i++ {
 		eg.Go(func() error {
-			// Create instance.
-			var inst string
-			err := retry(func() error {
-				i, err := gomote.Create(ctx, typ)
-				inst = i
-				return err
-			}, deflakes)
-			if err != nil {
-				log.Printf("Aborting instance creation due to too many errors: %v", unwrap(err))
-				return nil
-			}
-			log.Printf("Created instance %s...", inst)
-
-			if clean == cleanExit {
-				defer func() {
-					log.Printf("Destroying instance %s...", inst)
-					if err := gomote.Destroy(context.Background(), inst); err != nil {
-						log.Printf("Error destroying instance %s: %v", inst, err)
-					}
-				}()
-			}
-
-			// Push GOROOT to instance.
-			// N.B. GOROOT is implicitly passed to gomote via the environment.
-			err = retry(func() error { return gomote.Push(ctx, inst) }, deflakes)
-			if err != nil {
-				log.Printf("Giving up on %s due to too many errors while pushing: %v", inst, unwrap(err))
-				return nil
-			}
-			log.Printf("Pushed to %s.", inst)
-
-			// Run command in a loop.
-			for {
-				log.Printf("Running command on %s.", inst)
-				results, err := gomote.Run(ctx, inst, env, cmd...)
-				select {
-				case <-ctx.Done():
-					// Context canceled. Return nil.
-					return nil
-				default:
-				}
-				if err != nil {
-					_, ok := err.(*exec.ExitError)
-					if !ok {
-						// Failed in some other way.
-						return err
-					}
-					if bytes.Contains(results, []byte(inst)) {
-						return fmt.Errorf("lost builder %q", inst)
-					}
-					if errRegexp != nil && !errRegexp.Match(results) {
-						// Only consider failures that match the regexp
-						// "real" failures. But if our verbosity level
-						// is high enough, dump the failure anyway.
-						f, err := os.CreateTemp("", inst)
-						if err != nil {
-							log.Printf("Failed to write output from %s to temp file: %v", inst, err)
-						}
-						if _, err := f.Write(results); err != nil {
-							log.Printf("Failed to write output from %s to %s: %v", inst, f.Name(), err)
-							f.Close()
-						}
-						f.Close()
-						if verbosity < 2 {
-							log.Printf("Unmatched failure on %s.", inst)
-						} else {
-							log.Printf("Unmatched failure on %s:\n%s", inst, string(results))
-						}
-						log.Printf("Wrote output of %s to %s.", inst, f.Name())
-						continue
-					}
-					log.Printf("Discovered failure on %s.", inst)
-					outName := inst + ".out"
-					if err := os.WriteFile(outName, results, 0o644); err != nil {
-						log.Printf("Dumping output from %s:\n%s", inst, string(results))
-						return fmt.Errorf("failed to write output: %v\n", err)
-					}
-					log.Printf("Wrote output of %s to %s.", inst, outName)
-					tarName := inst + ".tar.gz"
-					f, err := os.Create(tarName)
-					if err != nil {
-						return fmt.Errorf("failed to create archive for %s: %v", inst, err)
-					}
-					defer f.Close()
-					if err := gomote.Get(ctx, inst, f); err != nil {
-						return fmt.Errorf("failed to download archive for %s: %v", inst, err)
-					}
-					log.Printf("Downloaded archive of %s to %s.", inst, tarName)
-					if keepGoing {
-						return nil
-					}
-					return errStop
-				}
-			}
+			return runOneInstance(ctx, typ, errRegexp)
 		})
 	}
 	return eg.Wait()
+}
+
+// Run testing in a single instance.
+//
+// Returns errStop to halt all testing.
+func runOneInstance(ctx context.Context, typ string, errRegexp *regexp.Regexp) error {
+	// Create instance.
+	var inst string
+	err := retry(func() error {
+		i, err := gomote.Create(ctx, typ)
+		inst = i
+		return err
+	}, deflakes)
+	if err != nil {
+		log.Printf("Aborting instance creation due to too many errors: %v", unwrap(err))
+		return nil
+	}
+	log.Printf("Created instance %s...", inst)
+
+	if clean == cleanExit {
+		defer func() {
+			log.Printf("Destroying instance %s...", inst)
+			if err := gomote.Destroy(context.Background(), inst); err != nil {
+				log.Printf("Error destroying instance %s: %v", inst, err)
+			}
+		}()
+	}
+
+	// Push GOROOT to instance.
+	// N.B. GOROOT is implicitly passed to gomote via the environment.
+	err = retry(func() error { return gomote.Push(ctx, inst) }, deflakes)
+	if err != nil {
+		log.Printf("Giving up on %s due to too many errors while pushing: %v", inst, unwrap(err))
+		return nil
+	}
+	log.Printf("Pushed to %s.", inst)
+
+	// Run command in a loop.
+	for {
+		log.Printf("Running command on %s.", inst)
+		cmd := flag.Args()[1:]
+		results, err := gomote.Run(ctx, inst, env, cmd...)
+		select {
+		case <-ctx.Done():
+			// Context canceled. Return nil.
+			return nil
+		default:
+		}
+		if err != nil {
+			_, ok := err.(*exec.ExitError)
+			if !ok {
+				// Failed in some other way.
+				return err
+			}
+			if bytes.Contains(results, []byte(inst)) {
+				return fmt.Errorf("lost builder %q", inst)
+			}
+			if errRegexp != nil && !errRegexp.Match(results) {
+				// Only consider failures that match the regexp
+				// "real" failures. But if our verbosity level
+				// is high enough, dump the failure anyway.
+				f, err := os.CreateTemp("", inst)
+				if err != nil {
+					log.Printf("Failed to write output from %s to temp file: %v", inst, err)
+				}
+				if _, err := f.Write(results); err != nil {
+					log.Printf("Failed to write output from %s to %s: %v", inst, f.Name(), err)
+					f.Close()
+				}
+				f.Close()
+				if verbosity < 2 {
+					log.Printf("Unmatched failure on %s.", inst)
+				} else {
+					log.Printf("Unmatched failure on %s:\n%s", inst, string(results))
+				}
+				log.Printf("Wrote output of %s to %s.", inst, f.Name())
+				continue
+			}
+			log.Printf("Discovered failure on %s.", inst)
+			outName := inst + ".out"
+			if err := os.WriteFile(outName, results, 0o644); err != nil {
+				log.Printf("Dumping output from %s:\n%s", inst, string(results))
+				return fmt.Errorf("failed to write output: %v\n", err)
+			}
+			log.Printf("Wrote output of %s to %s.", inst, outName)
+			tarName := inst + ".tar.gz"
+			f, err := os.Create(tarName)
+			if err != nil {
+				return fmt.Errorf("failed to create archive for %s: %v", inst, err)
+			}
+			defer f.Close()
+			if err := gomote.Get(ctx, inst, f); err != nil {
+				return fmt.Errorf("failed to download archive for %s: %v", inst, err)
+			}
+			log.Printf("Downloaded archive of %s to %s.", inst, tarName)
+			if keepGoing {
+				return nil
+			}
+			return errStop
+		}
+	}
 }
 
 func retry(f func() error, retries uint) error {
